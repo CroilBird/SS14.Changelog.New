@@ -19,16 +19,19 @@ namespace Changelog
                 Description = "Path to the changelog directory",
                 Required = true,
             };
+            
             Option<string> repoOption = new("--repo", "-r")
             {
                 Description = "Repository to use. in the form owner/repo. E.g. space-wizards/space-station-14",
                 Required = true,
             };
+            
             Option<string> branchOption = new("--branch", "-b")
             {
                 Description = "Branch to look at for updates. Should probably be master.",
                 Required = true,
             };
+            
             Option<List<string>> extraCategories = new("--extra-categories", "-e")
             {
                 Description = "Comma-separated list of extra categories",
@@ -42,6 +45,18 @@ namespace Changelog
             Option<string?> githubToken = new("--github-token", "-t")
             {
                 Description = "Optional github token. Requests are limited to 60 per hour if you don't add one, so like.. you should add one.",
+            };
+            
+            Option<string> discordWebhookUrlOption = new("--discord-webhook-url", "-u")
+            {
+                Description = "URL for the discord webhook",
+                Required = true,
+            };
+
+            Option<string> changelogMarkdownPathOption = new("--changelog-md-path", "-c")
+            {
+                Description = "Path where the changelog markdown file is located. This will be sent to the discord webhook. Won't generate if not included.",
+                Required = true,
             };
 
             updateCommand.Options.Add(changelogDirOption);
@@ -60,25 +75,28 @@ namespace Changelog
             rootCommand.Subcommands.Add(updateCommand);
 
             // generate diff subcommand
-            // TODO
+            Command dumpCommand = new("dump-diff", "Dumps a diff to a markdown file, for later sending to discord or hosting on CDN");
 
+            dumpCommand.Options.Add(changelogDirOption);
+            dumpCommand.Options.Add(repoOption);
+            dumpCommand.Options.Add(branchOption);
+            dumpCommand.Options.Add(extraCategories);
+            dumpCommand.Options.Add(changelogMarkdownPathOption);
+            dumpCommand.Options.Add(githubToken);
 
+            dumpCommand.SetAction(parseResult => DumpDiffToMarkdown(
+                parseResult.GetValue(changelogDirOption)!,
+                parseResult.GetValue(repoOption)!,
+                parseResult.GetValue(branchOption)!,
+                parseResult.GetValue(extraCategories)!,
+                parseResult.GetValue(changelogMarkdownPathOption)!,
+                parseResult.GetValue(githubToken)
+            ));
+            rootCommand.Subcommands.Add(dumpCommand);
 
             // Send webhook subcommand
-
             Command sendWebhookCommand = new("send-webhook", "Send changelog markdown file to a discord webhook");
 
-            Option<string> discordWebhookUrlOption = new("--discord-webhook-url", "-u")
-            {
-                Description = "URL for the discord webhook",
-                Required = true,
-            };
-
-            Option<string> changelogMarkdownPathOption = new("--changelog-md-path", "-c")
-            {
-                Description = "Path where the changelog markdown file is located. This will be sent to the discord webhook. Won't generate if not included.",
-                Required = true,
-            };
 
             sendWebhookCommand.Options.Add(discordWebhookUrlOption);
             sendWebhookCommand.Options.Add(changelogMarkdownPathOption);
@@ -123,11 +141,34 @@ namespace Changelog
             // Generate a new YMLfest out of this
             var changelogs = PR.ParseAllPRBodies(diff, extraCategories);
 
-            // // Write the actual changelog to .YML parts
-            // IO.WriteChangelogParts(changelogs, changelogDir);
-
             // Add these parts to the actual changelog and trim older entries
             IO.UpdateChangelogs(changelogs, changelogDir);
+
+            return 0;
+        }
+
+        private static int DumpDiffToMarkdown(
+            string changelogDir,
+            string repo,
+            string branch,
+            List<string> extraCategories,
+            string changelogMarkdownPath,
+            string? githubToken = null
+        )
+        {
+            if (githubToken is not null)
+                Console.WriteLine("Using github token");
+
+            // Get the last merged PR time
+            var since = PR.GetLastMergedTimeOffset(changelogDir);
+
+            // Get the list of PRs that were merged since last time.
+            var diff = PR.GetDiff(since, repo, branch, githubToken);
+
+            // Generate a new YMLfest out of this
+            var changelogs = PR.ParseAllPRBodies(diff, extraCategories);
+            
+            IO.DumpChangelogToMarkdown(changelogMarkdownPath, changelogs);
 
             return 0;
         }

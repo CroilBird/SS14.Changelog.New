@@ -112,12 +112,12 @@ public static class PR
         };
     }
 
-    public static List<ChangelogData> ParseAllPRBodies(IEnumerable<GHPullRequest> pullRequests, List<string> extraCategories)
+    public static List<ChangelogData> ParseAllPRBodies(IEnumerable<GHPullRequest> pullRequests, List<string>? extraCategories = null)
     {
         List<ChangelogData> changelog = [];
         foreach (var pullRequest in pullRequests)
         {
-            var changelogData = ParsePRBody(pullRequest, extraCategories);
+            var changelogData = ParsePRBody(pullRequest, extraCategories ?? []);
 
             if (changelogData is null)
                 continue;
@@ -205,14 +205,16 @@ public static class PR
     /// <param name="changelogDir">Directory that contains the Changelog.yml and specific changelog files</param>
     /// <param name="extraCategories">Names of extra categories to parse, e.g. Admin, Maps, Rules</param>
     /// <returns></returns>
-    public static DateTimeOffset GetLastMergedTimeOffset(string changelogDir, List<string> extraCategories)
+    public static DateTimeOffset GetLastMergedTimeOffset(string changelogDir, List<string>? extraCategories = null)
     {
         // parse the current yamls
         var allCategories = new HashSet<string>
         {
             "Changelog",
         };
-        allCategories.UnionWith(extraCategories);
+        
+        if (extraCategories is not null)
+            allCategories.UnionWith(extraCategories);
 
         var since = DateTimeOffset.MinValue;
 
