@@ -5,6 +5,8 @@ namespace Changelog;
 
 public static class IO
 {
+    public static int MaxChangelogEntries = 500;
+    
     public static Dictionary<ChangelogData.ChangeType, string> Emojis = new()
     {
         { ChangelogData.ChangeType.Add, "🆕" },
@@ -104,6 +106,15 @@ public static class IO
 
             // if you think the above stinks, so do I. this is the way it is because I cannot nicely serialize and
             // deserialize between yaml and C# objects.
+            
+            // trim old entries
+            if (entries.Count() > MaxChangelogEntries)
+            {
+                while (entries.Count() - MaxChangelogEntries > 0)
+                {
+                    entries.Children.RemoveAt(0);
+                }   
+            }
 
             using var writer = new StreamWriter(changelogYmlPath);
             yamlStream.Save(writer);

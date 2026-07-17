@@ -126,10 +126,8 @@ namespace Changelog
             // // Write the actual changelog to .YML parts
             // IO.WriteChangelogParts(changelogs, changelogDir);
 
-            // Add these parts to the actual changelog
+            // Add these parts to the actual changelog and trim older entries
             IO.UpdateChangelogs(changelogs, changelogDir);
-
-            // Trim older entries
 
             return 0;
         }
