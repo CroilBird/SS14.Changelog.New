@@ -1,7 +1,11 @@
 using System.Collections.Immutable;
-using System.Runtime.InteropServices.JavaScript;
+using System.Runtime.Serialization.Json;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using GraphQL;
+using GraphQL.Client.Http;
+using GraphQL.Client.Serializer.SystemTextJson;
 using YamlDotNet.RepresentationModel;
 
 namespace Changelog;
@@ -27,10 +31,226 @@ public static class PR
 
     public const string MainCategory = "Main";
 
-    private const string GithubApiBase = "https://api.github.com/repos";
+    private const string GithubGraphQLApiBase = "https://api.github.com/graphql";
     private const string GithubRawDownloadBase = "https://raw.githubusercontent.com";
 
-    private const int MaxPages = 10;
+    /// <summary>
+    /// Get the last merge time in a changelog yaml mapping node
+    /// </summary>
+    /// <param name="changelog">YAML mapping node containing changelog entries</param>
+    /// <returns>Time of last PR with a changelog that was merged</returns>
+    private static DateTimeOffset GetLastMergedChangelogEntry(YamlMappingNode changelog)
+    {
+        var lastMergeTime = DateTimeOffset.MinValue;
+        
+        var entries = (YamlSequenceNode)changelog.Children[new YamlScalarNode("Entries")];
+        foreach (var entry in entries)
+        {
+            if (entry is not YamlMappingNode mappingNode)
+                continue;
+
+            var id = int.Parse((string)mappingNode.Children[new YamlScalarNode("id")]);
+            var timeNodeKey = new YamlScalarNode("time");
+
+            if (!mappingNode.Children.TryGetValue(timeNodeKey, out var timeValue))
+                continue;
+
+            var timeString = (string)timeValue;
+
+            var prMergeTime = DateTimeOffset.Parse(timeString);
+
+            if (prMergeTime <= lastMergeTime)
+                continue;
+
+            lastMergeTime = prMergeTime;
+        }
+
+        return lastMergeTime;
+    }
+
+    /// <summary>
+    /// Get the time at which the last PR was merged in the given changelogs under the changelogDir
+    /// </summary>
+    /// <param name="changelogDir">Directory that contains the Changelog.yml and specific changelog files</param>
+    /// <param name="extraCategories">Names of extra categories to parse, e.g. Admin, Maps, Rules</param>
+    /// <returns></returns>
+    public static DateTimeOffset GetLastMergedTimeFromChangelogs(string changelogDir, List<string>? extraCategories = null)
+    {
+        // parse the current yamls
+        var allCategories = new HashSet<string>
+        {
+            "Changelog",
+        };
+        
+        if (extraCategories is not null)
+            allCategories.UnionWith(extraCategories);
+        
+        var lastMergedTime = DateTimeOffset.MinValue;
+
+        foreach (var category in allCategories)
+        {
+            var fileName = Path.Combine(
+                changelogDir,
+                $"{category}.yml"
+            );
+
+            // Yamldotnet's deserialization is, for lack of a better term, pure ass.
+            // I suspect this is the reason why part of the changelog generation stuff was in python
+            // because python's libraries actually do work.
+            // If I try to deserialize the yaml stream in any way into a proper object,
+            // it simply refuses to work. I'll make a class like
+            // public class Root {
+            //     public string Fuck;
+            // }
+            // and deserialize the following yml:
+            // Fuck: shit
+            // and Yamldotnet, in its infinite wisdom, will insist that
+            // System.Runtime.Serialization.SerializationException: Property 'Fuck' not found on type 'Root'.
+            // complete garbage.
+
+            // so instead we do a bunch of bullshit
+
+            using var reader = new StreamReader(fileName);
+            var yamlStream = new YamlStream();
+            yamlStream.Load(reader);
+
+            var changelog = (YamlMappingNode)yamlStream.Documents[0].RootNode;
+
+            var categoryLastMergedTime = GetLastMergedChangelogEntry(changelog);
+
+            if (lastMergedTime < categoryLastMergedTime)
+            {
+                lastMergedTime = categoryLastMergedTime;
+            }
+        }
+
+        Console.WriteLine($"Last PR time: {lastMergedTime}");
+
+        return lastMergedTime;
+    }
+
+
+    /// <summary>
+    /// Get the time at which the last PR with a changelog was merged from a specific git reference
+    /// </summary>
+    /// <param name="sinceRefSha"></param>
+    /// <param name="extraCategories"></param>
+    /// <returns></returns>
+    /// <exception cref="Exception"></exception>
+    public static DateTimeOffset GetLastMergedFromRef(string sinceRefSha, List<string> extraCategories)
+    {
+        var lastMergedTime = DateTimeOffset.MinValue;
+
+        List<string> allCategories = ["Changelog"];
+        allCategories.AddRange(extraCategories);
+
+        foreach (var category in allCategories)
+        {
+            var refChangelogUrl =
+                $"{GithubRawDownloadBase}/{Config.Instance.Repo}/{sinceRefSha}/{Config.Instance.ChangelogRepoPath}/{category}.yml";
+
+            HttpRequestMessage request = new(HttpMethod.Get, refChangelogUrl);
+            
+            if (Config.Instance.GithubToken is not null)
+                request.Headers.Add("Authorization", $"Bearer {Config.Instance.GithubToken}");
+
+            var response = Client.Send(request);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new Exception("Could not get changelog content: " + response.Content.ReadAsStringAsync().Result);
+            }
+            
+            using var reader = new StreamReader(response.Content.ReadAsStream());
+            var yamlStream = new YamlStream();
+            yamlStream.Load(reader);
+
+            var changelog = (YamlMappingNode)yamlStream.Documents[0].RootNode;
+            
+            var categoryLastMergedTime = GetLastMergedChangelogEntry(changelog);
+
+            if (lastMergedTime < categoryLastMergedTime)
+            {
+                lastMergedTime = categoryLastMergedTime;
+            }
+        }
+    
+        return lastMergedTime;
+    }
+
+    public static List<GHPullRequest> GetDiff(DateTimeOffset lastMergeTime, string repo, string branch, string? authToken)
+    {
+        List<GHPullRequest> pullRequests = [];
+        
+        
+        // Github allows you to filter by merged after a certain date, but it only accepts the date part
+        var date = lastMergeTime.ToString("yyyy-MM-dd");
+
+        var hasNextPage = true;
+        string? afterCursor = null;
+
+        while (hasNextPage) {
+            var query = $$"""
+                          {
+                            search(first: 50, query: "is:pr repo:{{repo}} base:{{branch}} is:merged merged:>={{date}}", type: ISSUE, after: {{ '"' + afterCursor + '"' ?? "null"}}) {
+                              edges {
+                                node {
+                                  ... on PullRequest {
+                                    merged
+                                    body
+                                    user: author {
+                                      login
+                                    }
+                                    mergedAt
+                                    base: baseRef {
+                                      ref: name
+                                    }
+                                    number
+                                    html_url: url
+                                  }
+                                }
+                              }
+                              pageInfo {
+                                hasNextPage
+                                endCursor
+                              }
+                            }
+                          }
+                          """;
+
+
+            var graphQL = new GraphQLHttpClient(
+                GithubGraphQLApiBase,
+                new SystemTextJsonSerializer()
+            );
+
+
+            if (authToken is not null)
+                graphQL.HttpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {authToken}");
+
+            var graphQLRequest = new GraphQLRequest(query);
+
+            var response = graphQL.SendQueryAsync<GraphQLResponse>(graphQLRequest).Result;
+
+            foreach (var edge in response.Data.Search.Edges)
+            {
+                if (edge.Node.MergedAt <= lastMergeTime)
+                    continue;
+
+                pullRequests.Add(edge.Node);
+            }
+
+            if (!response.Data.Search.PageInfo.HasNextPage)
+                break;
+
+            afterCursor = response.Data.Search.PageInfo.EndCursor;
+        }
+        
+        // order PRs by time ascending
+        pullRequests = pullRequests.OrderBy(item => item.MergedAt!.Value).ToList();
+        
+        return pullRequests;
+    }
 
     /// <summary>
     /// Parse a PR body as returned by github and return a more terse changelog data
@@ -128,208 +348,5 @@ public static class PR
         }
 
         return changelog;
-    }
-
-    public static List<GHPullRequest> GetDiff(DateTimeOffset since, string repo, string branch, string? authToken)
-    {
-        List<GHPullRequest> pullRequests = [];
-        var page = 0;
-
-        while (page < MaxPages)
-        {
-            page++;
-
-            Console.WriteLine($"Crawling page {page} of {repo}/{branch} pull requests");
-
-            var commitApiURL = $"{GithubApiBase}/{repo}/pulls?state=closed&base={branch}&page={page}&per_page=50";
-
-            var request = new HttpRequestMessage(HttpMethod.Get, commitApiURL);
-
-            request.Headers.Add("User-Agent", repo);
-            request.Headers.Add("X-Github-Api-Version", "2026-03-10");
-            request.Headers.Add("Accept", "application/vnd.github+json");
-
-            if (authToken is not null)
-                request.Headers.Add("Authorization", $"Bearer {authToken}");
-
-            var response = Client.Send(request);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new Exception($"Github got mad: {response.Content.ReadAsStringAsync().Result}");
-            }
-
-            var options = new JsonSerializerOptions()
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-                PropertyNameCaseInsensitive = true,
-            };
-            var pulls = JsonSerializer.Deserialize<List<GHPullRequest>>(response.Content.ReadAsStream(), options);
-
-            if (pulls is null)
-            {
-                throw new Exception("Could not deserialize response json");
-            }
-
-            foreach (var pull in pulls)
-            {
-                if (pull.MergedAt is null)
-                    continue;
-
-                if (pull.Body is null)
-                {
-                    Console.WriteLine($"PR {pull.Number} has a null body");
-                    continue;
-                }
-
-                if (pull.MergedAt <= since)
-                    return pullRequests;
-
-                pullRequests.Add(pull);
-            }
-
-            // we do a little rate limiting
-            if (authToken is null)
-                Thread.Sleep(1000);
-        }
-
-        Console.WriteLine("We went so far back we stopped crawling. The generated changelog will have to do.");
-
-        // order PRs by time ascending
-        pullRequests = pullRequests.OrderBy(item => item.MergedAt!.Value).Reverse().ToList();
-
-        return pullRequests;
-    }
-
-    private static DateTimeOffset GetLastMergedChangelogEntry(YamlMappingNode changelog)
-    {
-        var lastMergeTime = DateTimeOffset.MinValue;
-        
-        var entries = (YamlSequenceNode)changelog.Children[new YamlScalarNode("Entries")];
-        foreach (var entry in entries)
-        {
-            if (entry is not YamlMappingNode mappingNode)
-                continue;
-
-            var id = int.Parse((string)mappingNode.Children[new YamlScalarNode("id")]);
-            var timeNodeKey = new YamlScalarNode("time");
-
-            if (!mappingNode.Children.TryGetValue(timeNodeKey, out var timeValue))
-                continue;
-
-            var timeString = (string)timeValue;
-
-            var prMergeTime = DateTimeOffset.Parse(timeString);
-
-            if (prMergeTime <= lastMergeTime)
-                continue;
-
-            lastMergeTime = prMergeTime;
-        }
-
-        return lastMergeTime;
-    }
-
-    /// <summary>
-    /// Get the number of the last PR that was included in the changelog
-    /// </summary>
-    /// <param name="changelogDir">Directory that contains the Changelog.yml and specific changelog files</param>
-    /// <param name="extraCategories">Names of extra categories to parse, e.g. Admin, Maps, Rules</param>
-    /// <returns></returns>
-    public static DateTimeOffset GetLastMergedTimeFromChangelogs(string changelogDir, List<string>? extraCategories = null)
-    {
-        // parse the current yamls
-        var allCategories = new HashSet<string>
-        {
-            "Changelog",
-        };
-        
-        if (extraCategories is not null)
-            allCategories.UnionWith(extraCategories);
-        
-        var lastMergedTime = DateTimeOffset.MinValue;
-
-        foreach (var category in allCategories)
-        {
-            var fileName = Path.Combine(
-                changelogDir,
-                $"{category}.yml"
-            );
-
-            // Yamldotnet's deserialization is, for lack of a better term, pure ass.
-            // I suspect this is the reason why part of the changelog generation stuff was in python
-            // because python's libraries actually do work.
-            // If I try to deserialize the yaml stream in any way into a proper object,
-            // it simply refuses to work. I'll make a class like
-            // public class Root {
-            //     public string Fuck;
-            // }
-            // and deserialize the following yml:
-            // Fuck: shit
-            // and Yamldotnet, in its infinite wisdom, will insist that
-            // System.Runtime.Serialization.SerializationException: Property 'Fuck' not found on type 'Root'.
-            // complete garbage.
-
-            // so instead we do a bunch of bullshit
-
-            using var reader = new StreamReader(fileName);
-            var yamlStream = new YamlStream();
-            yamlStream.Load(reader);
-
-            var changelog = (YamlMappingNode)yamlStream.Documents[0].RootNode;
-
-            var categoryLastMergedTime = GetLastMergedChangelogEntry(changelog);
-
-            if (lastMergedTime < categoryLastMergedTime)
-            {
-                lastMergedTime = categoryLastMergedTime;
-            }
-        }
-
-        Console.WriteLine($"Last PR time: {lastMergedTime}");
-
-        return lastMergedTime;
-    }
-
-
-    public static DateTimeOffset GetLastMergedFromRef(string sinceRefSha, List<string> extraCategories)
-    {
-        var lastMergedTime = DateTimeOffset.MinValue;
-
-        List<string> allCategories = ["Changelog"];
-        allCategories.AddRange(extraCategories);
-
-        foreach (var category in allCategories)
-        {
-            var refChangelogUrl =
-                $"{GithubRawDownloadBase}/{Config.Instance.Repo}/{sinceRefSha}/{Config.Instance.ChangelogRepoPath}/{category}.yml";
-
-            HttpRequestMessage request = new(HttpMethod.Get, refChangelogUrl);
-            
-            if (Config.Instance.GithubToken is not null)
-                request.Headers.Add("Authorization", $"Bearer {Config.Instance.GithubToken}");
-
-            var response = Client.Send(request);
-
-            if (!response.IsSuccessStatusCode)
-            {
-                throw new Exception("Could not get changelog content: " + response.Content.ReadAsStringAsync().Result);
-            }
-            
-            using var reader = new StreamReader(response.Content.ReadAsStream());
-            var yamlStream = new YamlStream();
-            yamlStream.Load(reader);
-
-            var changelog = (YamlMappingNode)yamlStream.Documents[0].RootNode;
-            
-            var categoryLastMergedTime = GetLastMergedChangelogEntry(changelog);
-
-            if (lastMergedTime < categoryLastMergedTime)
-            {
-                lastMergedTime = categoryLastMergedTime;
-            }
-        }
-    
-        return lastMergedTime;
     }
 }

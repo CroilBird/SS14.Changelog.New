@@ -3,13 +3,14 @@ using System.Text.Json.Serialization;
 
 namespace Changelog
 {
-    [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.SnakeCaseLower)]
-    [JsonSerializable(typeof(GHPullRequestEvent))]
-    [JsonSerializable(typeof(GHPushEvent))]
-    public sealed partial class GitHubSerializationContext : JsonSerializerContext;
+    public sealed record GraphQLResponse(GrapQLSearchResponse Search);
 
-    public sealed record GHPullRequestEvent(int Number, string Action, GHPullRequest PullRequest);
+    public sealed record GrapQLSearchResponse(List<GraphQLEdge> Edges, GraphQLPageInfo PageInfo);
 
+    public sealed record GraphQLPageInfo(bool HasNextPage, string EndCursor);
+
+    public sealed record GraphQLEdge(GHPullRequest Node);
+    
     public sealed record GHPullRequest(
         bool Merged,
         string Body,
