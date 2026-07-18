@@ -1,7 +1,4 @@
 using System.Collections.Immutable;
-using System.Runtime.Serialization.Json;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using GraphQL;
 using GraphQL.Client.Http;
@@ -10,6 +7,9 @@ using YamlDotNet.RepresentationModel;
 
 namespace Changelog;
 
+/// <summary>
+/// PR helper functions. seeks out last merges, collects PRs, generates changelog objects
+/// </summary>
 public static class PR
 {
     // Regexes are all copied from the old code
@@ -146,6 +146,7 @@ public static class PR
 
         foreach (var category in allCategories)
         {
+            // get the category's YAML at a specific ref
             var refChangelogUrl =
                 $"{GithubRawDownloadBase}/{Config.Instance.Repo}/{sinceRefSha}/{Config.Instance.ChangelogRepoPath}/{category}.yml";
 
@@ -161,12 +162,14 @@ public static class PR
                 throw new Exception("Could not get changelog content: " + response.Content.ReadAsStringAsync().Result);
             }
             
+            // read the file YML
             using var reader = new StreamReader(response.Content.ReadAsStream());
             var yamlStream = new YamlStream();
             yamlStream.Load(reader);
 
             var changelog = (YamlMappingNode)yamlStream.Documents[0].RootNode;
             
+            // Get the last merged time found in this file
             var categoryLastMergedTime = GetLastMergedChangelogEntry(changelog);
 
             if (lastMergedTime < categoryLastMergedTime)
@@ -178,6 +181,14 @@ public static class PR
         return lastMergedTime;
     }
 
+    /// <summary>
+    /// Returns a list of github pull request objects that have a body and were merged into `<paramref name="branch"/>` after `<paramref name="lastMergeTime"/>`
+    /// </summary>
+    /// <param name="lastMergeTime">The last merged PR. this will NOT be included in the diff</param>
+    /// <param name="repo">The repository to look at</param>
+    /// <param name="branch">The branch serving as a base on which PRs were merged. Probably should be mastger</param>
+    /// <param name="authToken">Optional auth token if you don't want to get rate limited. This should probably not be optional</param>
+    /// <returns></returns>
     public static List<GHPullRequest> GetDiff(DateTimeOffset lastMergeTime, string repo, string branch, string? authToken)
     {
         List<GHPullRequest> pullRequests = [];
@@ -186,10 +197,13 @@ public static class PR
         // Github allows you to filter by merged after a certain date, but it only accepts the date part
         var date = lastMergeTime.ToString("yyyy-MM-dd");
 
-        var hasNextPage = true;
+        var page = 0;
         string? afterCursor = null;
 
-        while (hasNextPage) {
+        while (page < Config.Instance.MaxPages) {
+            // yes I know graphql-dotnet has variables and placeholders. no they aren't documented correctly or very well
+            // no I am not going to spend more time trying to guess how they should be used. it can go kick rocks.
+            // string interpolation it is
             var query = $$"""
                           {
                             search(first: 50, query: "is:pr repo:{{repo}} base:{{branch}} is:merged merged:>={{date}}", type: ISSUE, after: {{ '"' + afterCursor + '"' ?? "null"}}) {
@@ -245,6 +259,8 @@ public static class PR
 
             afterCursor = response.Data.Search.PageInfo.EndCursor;
         }
+        
+        // at the end of this we have a collection of PRs with bodies
         
         // order PRs by time ascending
         pullRequests = pullRequests.OrderBy(item => item.MergedAt!.Value).ToList();

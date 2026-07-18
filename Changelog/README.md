@@ -1,6 +1,10 @@
 # SS14 changelog
 
-This is a program that generates changelogs for SS14. 
+This is a program that generates changelogs for SS14. Parts of it were copied from the old one:
+
+https://github.com/space-wizards/SS14.Changelog
+
+## Setup
 
 Configure this by setting env variables or having a .env file in whatever place you run this in.
 

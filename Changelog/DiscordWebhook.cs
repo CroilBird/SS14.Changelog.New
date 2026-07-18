@@ -9,9 +9,14 @@ public static class DiscordWebhook
 {
     private static readonly HttpClient Client = new();
 
-    public const int Margin = 100;
     public const int DiscordWebhookCharacterLimit = 2000;
 
+    /// <summary>
+    /// Cuts up content from a streamreader into discord friendly chunks and sends them onwards
+    /// </summary>
+    /// <param name="webhookUrl">discord webhook url to send to</param>
+    /// <param name="contentStreamReader">stream reader from which to read content from</param>
+    /// <returns></returns>
     public static bool SendDiffInParts(string webhookUrl, StreamReader contentStreamReader)
     {
         var sb = new StringBuilder(DiscordWebhookCharacterLimit);
@@ -43,13 +48,20 @@ public static class DiscordWebhook
         return true;
     }
 
+    /// <summary>
+    /// Does the actual sending of content to a discord webhook
+    /// </summary>
+    /// <param name="webhookUrl"></param>
+    /// <param name="contentPart"></param>
+    /// <returns></returns>
     public static bool SendPart(string webhookUrl, string contentPart)
     {
-
         var discordWebhookBody = new Dictionary<string, object>()
         {
             { "content", contentPart },
+            // disallow mentions
             { "allowed_mentions", new Dictionary<string, List<string>>(){ { "parse", [] } } },
+            // disable embeds
             { "flags", 1 << 2 },
         };
 

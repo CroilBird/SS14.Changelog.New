@@ -1,6 +1,8 @@
 ﻿using System.Collections.Immutable;
 using System.Text.Json.Serialization;
 
+// this is largely taken from the old code here 
+// https://github.com/space-wizards/SS14.Changelog/blob/83831f3cf8d1b6e49432b4a45f5aa3c6e3f5fc2c/SS14.Changelog/GitHubData.cs
 namespace Changelog
 {
     public sealed record GraphQLResponse(GrapQLSearchResponse Search);

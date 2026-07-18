@@ -18,6 +18,8 @@ public sealed class Config
     public string? GithubToken { get; set; }
     [ConfigurationKeyName("DISCORD_WEBHOOK")]
     public string? DiscordWebHook { get; set; }
+    [ConfigurationKeyName("MAX_GRAPQHL_PAGES")]
+    public int MaxPages { get; set; } = 50;
 
     public Config()
     {

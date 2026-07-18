@@ -3,10 +3,19 @@ using YamlDotNet.RepresentationModel;
 
 namespace Changelog;
 
+/// <summary>
+/// File IO for yml and markdown stuff
+/// </summary>
 public static class IO
 {
+    /// <summary>
+    /// How many changelog entries should be in a yaml. older ones are pruned
+    /// </summary>
     public static int MaxChangelogEntries = 500;
     
+    /// <summary>
+    /// Emojis associated with a change type
+    /// </summary>
     public static Dictionary<ChangelogData.ChangeType, string> Emojis = new()
     {
         { ChangelogData.ChangeType.Add, "🆕" },
@@ -15,16 +24,27 @@ public static class IO
         { ChangelogData.ChangeType.Tweak, "⚒️" },
     };
 
+    /// <summary>
+    /// Convert a yaml scalar (text) node to a single-quoted string
+    /// </summary>
     private static YamlScalarNode SingleQuoted(string content)
     {
         return new YamlScalarNode(content) { Style = ScalarStyle.SingleQuoted };
     }
 
+    /// <summary>
+    /// Convert a yaml scalar (text) node to a double-quoted string
+    /// </summary>
     private static YamlScalarNode DoubleQuoted(string content)
     {
         return new YamlScalarNode(content) { Style = ScalarStyle.DoubleQuoted };
     }
 
+    /// <summary>
+    /// Dumps a changelog to markdown. This only sends "main" category changelogs, so no admin or map or whatever.
+    /// </summary>
+    /// <param name="changelogMarkdownPath">Path of the markdown file</param>
+    /// <param name="changelogParts">Changelog parts to include</param>
     public static void DumpChangelogToMarkdown(string changelogMarkdownPath, IEnumerable<ChangelogData> changelogParts)
     {
         using var writer = new StreamWriter(changelogMarkdownPath);
@@ -50,6 +70,10 @@ public static class IO
     }
 
 
+    /// <summary>
+    /// Update the YML changelogs from a changelog part.
+    /// A changelog part may include multiple categories
+    /// </summary>
     private static void UpdateChangelogFromPart(ChangelogData changelogPart, string changelogDir)
     {
         foreach (var category in changelogPart.Categories)
@@ -64,7 +88,6 @@ public static class IO
             Console.WriteLine($"Writing changelog part {changelogYmlPath}");
 
             // load the entire yaml
-
             var yamlStream = new YamlStream();
 
             using var reader = new StreamReader(changelogYmlPath);
@@ -115,13 +138,16 @@ public static class IO
                     entries.Children.RemoveAt(0);
                 }   
             }
-
+            
+            // done pruning old entries, write everything.
             using var writer = new StreamWriter(changelogYmlPath);
             yamlStream.Save(writer);
         }
     }
 
-
+    /// <summary>
+    /// Helper function to update YML changelogs from a list of changelog parts.
+    /// </summary>
     public static void UpdateChangelogs(IEnumerable<ChangelogData> changelogParts, string changelogDir)
     {
         foreach (var changelogPart in changelogParts)
