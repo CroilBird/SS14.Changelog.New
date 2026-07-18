@@ -41,7 +41,7 @@ public static class IO
                 foreach (var change in category.Changes)
                 {
                     var emoji = Emojis[change.Type];
-                    writer.WriteLine($"{emoji} - {change.Message} ([{changelogPart.Number}]({changelogPart.HtmlUrl})");
+                    writer.WriteLine($"{emoji} - {change.Message} ([#{changelogPart.Number}]({changelogPart.HtmlUrl})");
                 }
 
                 writer.WriteLine();
@@ -105,9 +105,9 @@ public static class IO
             entries.Add(yamlMapping);
 
             // if you think the above stinks, so do I. this is the way it is because I cannot nicely serialize and
-            // deserialize between yaml and C# objects.
+            // deserialize between yaml and C# objects. if you know how to do it replace this and god help me
             
-            // trim old entries
+            // trim old entries. yes this also stinks
             if (entries.Count() > MaxChangelogEntries)
             {
                 while (entries.Count() - MaxChangelogEntries > 0)

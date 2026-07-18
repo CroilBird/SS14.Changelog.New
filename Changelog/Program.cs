@@ -8,43 +8,17 @@ namespace Changelog
     {
         static int Main(string[] args)
         {
-            RootCommand rootCommand = new("Changelog generator for SS14");
-
-
-            // Update changelog subcommand
-            Command updateCommand = new("update-changelogs", "Updates the changelog.yml files in resources");
-
+            // options
             Option<string> changelogDirOption = new("--changelog-dir", "-d")
             {
                 Description = "Path to the changelog directory",
                 Required = true,
             };
             
-            Option<string> repoOption = new("--repo", "-r")
+            Option<string> sinceRefShaOption = new("--sha", "-s")
             {
-                Description = "Repository to use. in the form owner/repo. E.g. space-wizards/space-station-14",
+                Description = "Specific ref sha to compare changes to. Good chance this should be the github.event.pull_request.base.sha workflow env",
                 Required = true,
-            };
-            
-            Option<string> branchOption = new("--branch", "-b")
-            {
-                Description = "Branch to look at for updates. Should probably be master.",
-                Required = true,
-            };
-            
-            Option<List<string>> extraCategories = new("--extra-categories", "-e")
-            {
-                Description = "Comma-separated list of extra categories",
-                CustomParser = parseResult =>
-                {
-                    var parts = parseResult.Tokens.Single().Value.Split(",");
-                    return parts.ToList();
-                },
-            };
-
-            Option<string?> githubToken = new("--github-token", "-t")
-            {
-                Description = "Optional github token. Requests are limited to 60 per hour if you don't add one, so like.. you should add one.",
             };
             
             Option<string> discordWebhookUrlOption = new("--discord-webhook-url", "-u")
@@ -58,39 +32,29 @@ namespace Changelog
                 Description = "Path where the changelog markdown file is located. This will be sent to the discord webhook. Won't generate if not included.",
                 Required = true,
             };
+            
+            
+            RootCommand rootCommand = new("Changelog generator for SS14");
+            
+            // Update changelog subcommand
+            Command updateCommand = new("update", "Updates the changelog.yml files in resources");
 
             updateCommand.Options.Add(changelogDirOption);
-            updateCommand.Options.Add(repoOption);
-            updateCommand.Options.Add(branchOption);
-            updateCommand.Options.Add(extraCategories);
-            updateCommand.Options.Add(githubToken);
 
             updateCommand.SetAction(parseResult => Generate(
-                parseResult.GetValue(changelogDirOption)!,
-                parseResult.GetValue(repoOption)!,
-                parseResult.GetValue(branchOption)!,
-                parseResult.GetValue(extraCategories)!,
-                parseResult.GetValue(githubToken)
+                parseResult.GetValue(changelogDirOption)!
             ));
             rootCommand.Subcommands.Add(updateCommand);
 
             // generate diff subcommand
             Command dumpCommand = new("dump-diff", "Dumps a diff to a markdown file, for later sending to discord or hosting on CDN");
 
-            dumpCommand.Options.Add(changelogDirOption);
-            dumpCommand.Options.Add(repoOption);
-            dumpCommand.Options.Add(branchOption);
-            dumpCommand.Options.Add(extraCategories);
+            dumpCommand.Options.Add(sinceRefShaOption);
             dumpCommand.Options.Add(changelogMarkdownPathOption);
-            dumpCommand.Options.Add(githubToken);
 
             dumpCommand.SetAction(parseResult => DumpDiffToMarkdown(
-                parseResult.GetValue(changelogDirOption)!,
-                parseResult.GetValue(repoOption)!,
-                parseResult.GetValue(branchOption)!,
-                parseResult.GetValue(extraCategories)!,
-                parseResult.GetValue(changelogMarkdownPathOption)!,
-                parseResult.GetValue(githubToken)
+                parseResult.GetValue(sinceRefShaOption)!,
+                parseResult.GetValue(changelogMarkdownPathOption)!
             ));
             rootCommand.Subcommands.Add(dumpCommand);
 
@@ -115,31 +79,43 @@ namespace Changelog
         /// Generates new changelogs
         /// </summary>
         /// <param name="changelogDir"></param>
-        /// <param name="repo"></param>
-        /// <param name="branch"></param>
-        /// <param name="extraCategories"></param>
-        /// <param name="githubToken"></param>
         private static int Generate(
-            string changelogDir,
-            string repo,
-            string branch,
-            List<string> extraCategories,
-            string? githubToken = null
+            string changelogDir
         )
         {
-            if (githubToken is not null)
+            if (Config.Instance.Repo is null)
+                throw new Exception("Repository not set");
+
+            if (Config.Instance.Branch is null)
+                throw new Exception("Branch is not set");
+
+            if (Config.Instance.GithubToken is not null)
                 Console.WriteLine("Using github token");
 
+            List<string> extraCategories = [];
+            if (Config.Instance.ExtraCategories is not null)
+                extraCategories.AddRange(Config.Instance.ExtraCategories.Split(','));
+
             // Get the last merged PR time
-            var since = PR.GetLastMergedTimeOffset(changelogDir, extraCategories);
+            var lastMergedTime = PR.GetLastMergedTimeFromChangelogs(changelogDir, extraCategories);
+            
+            Console.WriteLine($"Generating diff from {lastMergedTime}");
 
             // Get the list of PRs that were merged since last time.
-            var diff = PR.GetDiff(since, repo, branch, githubToken);
+            var diff = PR.GetDiff(lastMergedTime, Config.Instance.Repo, Config.Instance.Branch, Config.Instance.GithubToken);
 
             Console.WriteLine($"Collected {diff.Count} pull requests");
 
             // Generate a new YMLfest out of this
             var changelogs = PR.ParseAllPRBodies(diff, extraCategories);
+
+            if (changelogs.Count == 0)
+            {
+                Console.WriteLine("Nothing to do");
+                return 0;
+            }
+            
+            Console.WriteLine($"Generated {changelogs.Count} changelogs");
 
             // Add these parts to the actual changelog and trim older entries
             IO.UpdateChangelogs(changelogs, changelogDir);
@@ -148,25 +124,43 @@ namespace Changelog
         }
 
         private static int DumpDiffToMarkdown(
-            string changelogDir,
-            string repo,
-            string branch,
-            List<string> extraCategories,
-            string changelogMarkdownPath,
-            string? githubToken = null
+            string sinceRefSha,
+            string changelogMarkdownPath
         )
         {
-            if (githubToken is not null)
+            if (Config.Instance.Repo is null)
+                throw new Exception("Repository not set");
+
+            if (Config.Instance.Branch is null)
+                throw new Exception("Branch is not set");
+
+            if (Config.Instance.GithubToken is not null)
                 Console.WriteLine("Using github token");
 
+            List<string> extraCategories = [];
+            if (Config.Instance.ExtraCategories is not null)
+                extraCategories.AddRange(Config.Instance.ExtraCategories.Split(','));
+
             // Get the last merged PR time
-            var since = PR.GetLastMergedTimeOffset(changelogDir);
+            var lastMergedTime = PR.GetLastMergedFromRef(sinceRefSha, extraCategories);
+            
+            Console.WriteLine($"Generating diff from {lastMergedTime}");
 
             // Get the list of PRs that were merged since last time.
-            var diff = PR.GetDiff(since, repo, branch, githubToken);
+            var diff = PR.GetDiff(lastMergedTime, Config.Instance.Repo, Config.Instance.Branch, Config.Instance.GithubToken);
 
+            Console.WriteLine($"Collected {diff.Count} pull requests");
+            
             // Generate a new YMLfest out of this
             var changelogs = PR.ParseAllPRBodies(diff, extraCategories);
+
+            if (changelogs.Count == 0)
+            {
+                Console.WriteLine("Nothing to do");
+                return 0;
+            }
+            
+            Console.WriteLine($"Generated {changelogs.Count} changelogs");
             
             IO.DumpChangelogToMarkdown(changelogMarkdownPath, changelogs);
 

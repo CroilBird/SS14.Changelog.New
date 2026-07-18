@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Runtime.InteropServices.JavaScript;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using YamlDotNet.RepresentationModel;
@@ -27,6 +28,7 @@ public static class PR
     public const string MainCategory = "Main";
 
     private const string GithubApiBase = "https://api.github.com/repos";
+    private const string GithubRawDownloadBase = "https://raw.githubusercontent.com";
 
     private const int MaxPages = 10;
 
@@ -199,13 +201,42 @@ public static class PR
         return pullRequests;
     }
 
+    private static DateTimeOffset GetLastMergedChangelogEntry(YamlMappingNode changelog)
+    {
+        var lastMergeTime = DateTimeOffset.MinValue;
+        
+        var entries = (YamlSequenceNode)changelog.Children[new YamlScalarNode("Entries")];
+        foreach (var entry in entries)
+        {
+            if (entry is not YamlMappingNode mappingNode)
+                continue;
+
+            var id = int.Parse((string)mappingNode.Children[new YamlScalarNode("id")]);
+            var timeNodeKey = new YamlScalarNode("time");
+
+            if (!mappingNode.Children.TryGetValue(timeNodeKey, out var timeValue))
+                continue;
+
+            var timeString = (string)timeValue;
+
+            var prMergeTime = DateTimeOffset.Parse(timeString);
+
+            if (prMergeTime <= lastMergeTime)
+                continue;
+
+            lastMergeTime = prMergeTime;
+        }
+
+        return lastMergeTime;
+    }
+
     /// <summary>
     /// Get the number of the last PR that was included in the changelog
     /// </summary>
     /// <param name="changelogDir">Directory that contains the Changelog.yml and specific changelog files</param>
     /// <param name="extraCategories">Names of extra categories to parse, e.g. Admin, Maps, Rules</param>
     /// <returns></returns>
-    public static DateTimeOffset GetLastMergedTimeOffset(string changelogDir, List<string>? extraCategories = null)
+    public static DateTimeOffset GetLastMergedTimeFromChangelogs(string changelogDir, List<string>? extraCategories = null)
     {
         // parse the current yamls
         var allCategories = new HashSet<string>
@@ -215,12 +246,11 @@ public static class PR
         
         if (extraCategories is not null)
             allCategories.UnionWith(extraCategories);
-
-        var since = DateTimeOffset.MinValue;
+        
+        var lastMergedTime = DateTimeOffset.MinValue;
 
         foreach (var category in allCategories)
         {
-            Console.WriteLine(category);
             var fileName = Path.Combine(
                 changelogDir,
                 $"{category}.yml"
@@ -248,31 +278,58 @@ public static class PR
 
             var changelog = (YamlMappingNode)yamlStream.Documents[0].RootNode;
 
-            var entries = (YamlSequenceNode)changelog.Children[new YamlScalarNode("Entries")];
-            foreach (var entry in entries)
+            var categoryLastMergedTime = GetLastMergedChangelogEntry(changelog);
+
+            if (lastMergedTime < categoryLastMergedTime)
             {
-                if (entry is not YamlMappingNode mappingNode)
-                    continue;
-
-                var id = int.Parse((string)mappingNode.Children[new YamlScalarNode("id")]);
-                var timeNodeKey = new YamlScalarNode("time");
-
-                if (!mappingNode.Children.TryGetValue(timeNodeKey, out var timeValue))
-                    continue;
-
-                var timeString = (string)timeValue;
-
-                var time = DateTimeOffset.Parse(timeString);
-
-                if (time <= since)
-                    continue;
-
-                since = time;
+                lastMergedTime = categoryLastMergedTime;
             }
         }
 
-        Console.WriteLine($"Last PR time: {since}");
+        Console.WriteLine($"Last PR time: {lastMergedTime}");
 
-        return since;
+        return lastMergedTime;
+    }
+
+
+    public static DateTimeOffset GetLastMergedFromRef(string sinceRefSha, List<string> extraCategories)
+    {
+        var lastMergedTime = DateTimeOffset.MinValue;
+
+        List<string> allCategories = ["Changelog"];
+        allCategories.AddRange(extraCategories);
+
+        foreach (var category in allCategories)
+        {
+            var refChangelogUrl =
+                $"{GithubRawDownloadBase}/{Config.Instance.Repo}/{sinceRefSha}/{Config.Instance.ChangelogRepoPath}/{category}.yml";
+
+            HttpRequestMessage request = new(HttpMethod.Get, refChangelogUrl);
+            
+            if (Config.Instance.GithubToken is not null)
+                request.Headers.Add("Authorization", $"Bearer {Config.Instance.GithubToken}");
+
+            var response = Client.Send(request);
+
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new Exception("Could not get changelog content: " + response.Content.ReadAsStringAsync().Result);
+            }
+            
+            using var reader = new StreamReader(response.Content.ReadAsStream());
+            var yamlStream = new YamlStream();
+            yamlStream.Load(reader);
+
+            var changelog = (YamlMappingNode)yamlStream.Documents[0].RootNode;
+            
+            var categoryLastMergedTime = GetLastMergedChangelogEntry(changelog);
+
+            if (lastMergedTime < categoryLastMergedTime)
+            {
+                lastMergedTime = categoryLastMergedTime;
+            }
+        }
+    
+        return lastMergedTime;
     }
 }
