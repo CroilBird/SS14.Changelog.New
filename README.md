@@ -13,7 +13,7 @@ REPO=space-wizards/space-station-14
 BRANCH=master
 CHANGELOG_REPO_PATH=Resources/Changelog
 EXTRA_CATEGORIES=Admin,Maps,Rules
-#GITHUB_TOKEN=optional
+#GITHUB_TOKEN=optional sort of but you should really be using this. you can probably use the workflow token at GITHUB_TOKEN or whatever
 DISCORD_WEBHOOK=url to discord webhook for posting changelogs to a channel
 ```
 
