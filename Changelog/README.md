@@ -20,7 +20,7 @@ DISCORD_WEBHOOK=url to discord webhook for posting changelogs to a channel
 
 It does the following:
 
-### Update the changelog yms
+### Update the changelog YMLs
 
 ```
 Description:                                                                                                                                                                                                                                                                                                                                                    
@@ -70,11 +70,21 @@ Usage:
   Changelog send-webhook [options]
 
 Options:
-  -u, --discord-webhook-url <discord-webhook-url> (REQUIRED)  URL for the discord webhook
   -c, --changelog-md-path <changelog-md-path> (REQUIRED)      Path where the changelog markdown file is located. This will be sent to the discord webhook. Won't generate if not included.
   -?, -h, --help                                              Show help and usage information
 ```
 
 Reads the content of the input `--changelog-md-path` and sends the parts of it (split by discords max character limit of 2000)
 to the webhook specified by `--discord-webhook-url` 
+
+
+# how this should be used probably
+
+### During publish testing: 
+
+Workflow: checkout code -> `changelog update -d /path/to/Resources/Changelog` -> commit -> build -> publish testing build
+
+### During publish stable
+
+Workflow: get last publish ref -> run `changelog dump-diff -s [ref] -c diff.md` -> build -> publish -> if all goes well, `changelog send-webhook -c diff.md`
 
