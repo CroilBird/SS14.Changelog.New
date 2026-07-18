@@ -37,7 +37,7 @@ Options:
 Takes the last date it can find in the changelog .yml files, then crawls the repository and branch specified in the
 config for merged PRs. It then works these into the changelog .yml files.
 
-This is intended for the master branch whenever a PR is merged.
+This is intended for the master branch whenever a test publish is triggered but before the build is done and published
 
 ### Generate a diff markdown file
 
@@ -57,6 +57,8 @@ Options:
 Takes the last date it can find in the changelog .yml files **at the specified `--sha` ref**, then crawls the repository
 and branch specified in the config for merged PRs. It then works these into a human readable markdown file that is meant
 for people eyes specified at `--changelog-md-path`
+
+the ref should probably be the commit of the last stable publish
 
 This can be used to send it to a discord webhook or upload to a cdn or whatever
 
