@@ -14,8 +14,6 @@ public static class PR
 {
     // Regexes are all copied from the old code
     // https://github.com/space-wizards/SS14.Changelog/blob/83831f3cf8d1b6e49432b4a45f5aa3c6e3f5fc2c/SS14.Changelog/Controllers/WebhookController.cs#L23
-    private static readonly Regex IsChangelogFileRegex = new Regex(@"^Resources/Changelog/Parts/.*\.yml$");
-
     private static readonly Regex ChangelogHeaderRegex =
         new Regex(@"^\s*(?::cl:|🆑) *([a-z0-9_\- ,&]+)?\s*$", RegexOptions.IgnoreCase | RegexOptions.Multiline);
 
@@ -42,7 +40,7 @@ public static class PR
     private static DateTimeOffset GetLastMergedChangelogEntry(YamlMappingNode changelog)
     {
         var lastMergeTime = DateTimeOffset.MinValue;
-        
+
         var entries = (YamlSequenceNode)changelog.Children[new YamlScalarNode("Entries")];
         foreach (var entry in entries)
         {
@@ -81,10 +79,10 @@ public static class PR
         {
             "Changelog",
         };
-        
+
         if (extraCategories is not null)
             allCategories.UnionWith(extraCategories);
-        
+
         var lastMergedTime = DateTimeOffset.MinValue;
 
         foreach (var category in allCategories)
@@ -94,21 +92,9 @@ public static class PR
                 $"{category}.yml"
             );
 
-            // Yamldotnet's deserialization is, for lack of a better term, pure ass.
-            // I suspect this is the reason why part of the changelog generation stuff was in python
-            // because python's libraries actually do work.
-            // If I try to deserialize the yaml stream in any way into a proper object,
-            // it simply refuses to work. I'll make a class like
-            // public class Root {
-            //     public string Fuck;
-            // }
-            // and deserialize the following yml:
-            // Fuck: shit
-            // and Yamldotnet, in its infinite wisdom, will insist that
-            // System.Runtime.Serialization.SerializationException: Property 'Fuck' not found on type 'Root'.
-            // complete garbage.
-
-            // so instead we do a bunch of bullshit
+            // I couldn't figure out a proper way of doing deserialization into objects with yamldotnet, and it was not
+            // very helpful in telling me what I was doing wrong. If you have more experience with this and want to
+            // rewrite this and the UpdateChangelogFromPart function in IO.cs please do
 
             using var reader = new StreamReader(fileName);
             var yamlStream = new YamlStream();
@@ -128,7 +114,6 @@ public static class PR
 
         return lastMergedTime;
     }
-
 
     /// <summary>
     /// Get the time at which the last PR with a changelog was merged from a specific git reference
@@ -151,7 +136,7 @@ public static class PR
                 $"{GithubRawDownloadBase}/{Config.Instance.Repo}/{sinceRefSha}/{Config.Instance.ChangelogRepoPath}/{category}.yml";
 
             HttpRequestMessage request = new(HttpMethod.Get, refChangelogUrl);
-            
+
             if (Config.Instance.GithubToken is not null)
                 request.Headers.Add("Authorization", $"Bearer {Config.Instance.GithubToken}");
 
@@ -161,14 +146,14 @@ public static class PR
             {
                 throw new Exception("Could not get changelog content: " + response.Content.ReadAsStringAsync().Result);
             }
-            
+
             // read the file YML
             using var reader = new StreamReader(response.Content.ReadAsStream());
             var yamlStream = new YamlStream();
             yamlStream.Load(reader);
 
             var changelog = (YamlMappingNode)yamlStream.Documents[0].RootNode;
-            
+
             // Get the last merged time found in this file
             var categoryLastMergedTime = GetLastMergedChangelogEntry(changelog);
 
@@ -177,36 +162,50 @@ public static class PR
                 lastMergedTime = categoryLastMergedTime;
             }
         }
-    
+
         return lastMergedTime;
     }
 
     /// <summary>
     /// Returns a list of github pull request objects that have a body and were merged into `<paramref name="branch"/>` after `<paramref name="lastMergeTime"/>`
+    /// This uses github's graphql API to get only the PRs after a certain date, and should be pretty robust.
+    /// You really should not be hitting the maxpages limit unless changelogs have not been generated for like 6 months
     /// </summary>
     /// <param name="lastMergeTime">The last merged PR. this will NOT be included in the diff</param>
     /// <param name="repo">The repository to look at</param>
     /// <param name="branch">The branch serving as a base on which PRs were merged. Probably should be mastger</param>
-    /// <param name="authToken">Optional auth token if you don't want to get rate limited. This should probably not be optional</param>
+    /// <param name="authToken">Github PAT with content.read permissions or something. You NEED this or Github will get MAD</param>
     /// <returns></returns>
-    public static List<GHPullRequest> GetDiff(DateTimeOffset lastMergeTime, string repo, string branch, string? authToken)
+    public static List<GHPullRequest> GetDiff(DateTimeOffset lastMergeTime, string repo, string branch, string authToken)
     {
         List<GHPullRequest> pullRequests = [];
-        
-        
+
         // Github allows you to filter by merged after a certain date, but it only accepts the date part
         var date = lastMergeTime.ToString("yyyy-MM-dd");
 
         var page = 0;
         string? afterCursor = null;
 
-        while (page < Config.Instance.MaxPages) {
+        while (page <= Config.Instance.MaxPages)
+        {
+            page++;
+
+            string afterCursorString;
+            if (afterCursor is null)
+            {
+                afterCursorString = "null";
+            }
+            else
+            {
+                afterCursorString = $"\"{afterCursor}\"";
+            }
+
             // yes I know graphql-dotnet has variables and placeholders. no they aren't documented correctly or very well
             // no I am not going to spend more time trying to guess how they should be used. it can go kick rocks.
             // string interpolation it is
             var query = $$"""
                           {
-                            search(first: 50, query: "is:pr repo:{{repo}} base:{{branch}} is:merged merged:>={{date}}", type: ISSUE, after: {{ '"' + afterCursor + '"' ?? "null"}}) {
+                            search(first: 50, query: "is:pr repo:{{repo}} base:{{branch}} is:merged merged:>={{date}}", type: ISSUE, after: {{ afterCursorString }}) {
                               edges {
                                 node {
                                   ... on PullRequest {
@@ -238,9 +237,8 @@ public static class PR
                 new SystemTextJsonSerializer()
             );
 
-
-            if (authToken is not null)
-                graphQL.HttpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {authToken}");
+            // github will actually not allow you to make graphQL api calls without an auth token
+            graphQL.HttpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {authToken}");
 
             var graphQLRequest = new GraphQLRequest(query);
 
@@ -259,12 +257,12 @@ public static class PR
 
             afterCursor = response.Data.Search.PageInfo.EndCursor;
         }
-        
+
         // at the end of this we have a collection of PRs with bodies
-        
+
         // order PRs by time ascending
         pullRequests = pullRequests.OrderBy(item => item.MergedAt!.Value).ToList();
-        
+
         return pullRequests;
     }
 
@@ -278,6 +276,7 @@ public static class PR
     /// <returns></returns>
     public static ChangelogData? ParsePRBody(GHPullRequest pr, List<string> extraCategories)
     {
+        // get all categories we could match
         var allCategories = new HashSet<string>
         {
             MainCategory,
@@ -285,19 +284,26 @@ public static class PR
         allCategories.UnionWith(extraCategories);
 
         var body = CommentRegex.Replace(pr.Body!, "");
+
+        // match the :[cl]: part to make sure we have an actual changelog
         var match = ChangelogHeaderRegex.Match(body);
         if (!match.Success)
             return null;
 
+        // get the author. this defaults to the PR username if it is not set
         var author = match.Groups[1].Success ? match.Groups[1].Value.Trim() : pr.User.Login;
         var changelogBody = body.Substring(match.Index + match.Length);
 
+        // default to main category
         var currentCategory = MainCategory;
+
         var entries = new List<(string, ChangelogData.Change)>();
 
+        // now traverse through the rest of the changelog after the :[cl]: [name] header
         var reader = new StringReader(changelogBody);
         while (reader.ReadLine() is { } line)
         {
+            // find a category to match
             var categoryMatch = ChangelogCategoryRegex.Match(line);
             if (categoryMatch.Success)
             {
@@ -305,6 +311,8 @@ public static class PR
                 // Check if it's actually a defined category, skip it otherwise.
                 var categoryName = categoryMatch.Groups[1].Value;
 
+                // the changelog convention is all uppercase letters for the category. this should probably be changed
+                // to be less strict. convert this into the name we use for the file either way
                 var correctedName = categoryName.ToUpperInvariant() switch
                 {
                     "ADMIN" => "Admin",
@@ -319,10 +327,15 @@ public static class PR
                 continue;
             }
 
+            // if the above condition succeeded, we have a currentCategory that corresponds to something like Main, Admin,
+            // Rules or Maps. Otherwise, we use whatever the last category was
+
+            // get the type of change and the message (e.g. fix: message)
             var entryMatch = ChangelogEntryRegex.Match(line);
             if (!entryMatch.Success)
                 continue;
 
+            // convert the found type of change into an enum. this is more permissive than the category
             var type = entryMatch.Groups[1].Value.ToLowerInvariant() switch
             {
                 "add" => ChangelogData.ChangeType.Add,
@@ -334,10 +347,12 @@ public static class PR
 
             var message = entryMatch.Groups[2].Value.Trim();
 
+            // if all went well, add this change to the changelog entry
             if (type is { } t)
                 entries.Add((currentCategory, new ChangelogData.Change(t, message)));
         }
 
+        // assemble the changelogData from the list of changes we assembled
         var finalCategories = entries
             .GroupBy(e => e.Item1)
             .Select(g => new ChangelogData.CategoryData(g.Key, g.Select(e => e.Item2).ToImmutableArray()))
@@ -350,6 +365,9 @@ public static class PR
         };
     }
 
+    /// <summary>
+    /// Helper function to parse all PR bodies that are given in an enumerator
+    /// </summary>
     public static List<ChangelogData> ParseAllPRBodies(IEnumerable<GHPullRequest> pullRequests, List<string>? extraCategories = null)
     {
         List<ChangelogData> changelog = [];

@@ -1,0 +1,39 @@
+name: Update changelog
+
+on:
+  pull_request:
+  merge_group:
+
+jobs:
+  update-changelog:
+    if: ${{ github.event_name == 'merge_group' }}
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v7
+      with:
+        submodules: 'recursive'
+    - name: Setup .NET Core
+      uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: 10.0.x
+
+    - name: Update changelog YML
+      run: dotnet run --project Changelog update -d Resources/Changelog
+      env:
+        REPO: ${{ vars.CHANGELOG_REPO }}
+        BRANCH: ${{ vars.CHANGELOG_BRANCH }}
+        EXTRA_CATEGORIES: ${{ vars.CHANGELOG_EXTRA_CATEGORIES }}
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Commit changelog update
+      uses: stefanzweifel/git-auto-commit-action@v4
+      with:
+        file_pattern: 'Resources/Changelog/*.yml'
+        commit_author: ${{ vars.CHANGELOG_AUTHOR }}
+        commit_user_name: ${{ vars.CHANGELOG_USER_NAME }}
+        commit_message: Automated changelog update [skip ci]

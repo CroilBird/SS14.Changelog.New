@@ -2,6 +2,10 @@
 
 namespace Changelog
 {
+    /// <summary>
+    /// Contains the changelog data relevant for our changelog .ymls
+    /// This is taken from https://github.com/space-wizards/SS14.Changelog/blob/master/SS14.Changelog/ChangelogData.cs
+    /// </summary>
     public sealed record ChangelogData
     {
         public const string MainCategory = "Main";

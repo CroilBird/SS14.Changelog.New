@@ -32,16 +32,18 @@ public static class DiscordWebhook
             if (nextLine is null)
                 break;
 
+            // if we not going to exceed the discord limit with the next message, continue adding lines
             if (sb.Length + nextLine.Length < DiscordWebhookCharacterLimit)
                 continue;
 
+            // otherwise send the part
             if (!SendPart(webhookUrl, sb.ToString()))
                 return false;
 
             sb.Clear();
-            sb.Append(nextLine + "\n");
         }
 
+        // send the leftover part after breaking out of the while loop
         if (sb.Length > 0)
             return SendPart(webhookUrl, sb.ToString());
 
@@ -56,6 +58,7 @@ public static class DiscordWebhook
     /// <returns></returns>
     public static bool SendPart(string webhookUrl, string contentPart)
     {
+        // specific body for the webhook request. "content" contains the actual content of the discord message
         var discordWebhookBody = new Dictionary<string, object>()
         {
             { "content", contentPart },
@@ -66,10 +69,6 @@ public static class DiscordWebhook
         };
 
         var jsonContent = JsonSerializer.Serialize(discordWebhookBody);
-
-        Console.WriteLine("Sending JSON:");
-        Console.Write(jsonContent);
-        Console.WriteLine();
 
 
         var attempts = 0;
@@ -84,8 +83,6 @@ public static class DiscordWebhook
 
             var response = Client.Send(request);
 
-            Console.WriteLine($"Status: {response.StatusCode}, message: {response.Content.ReadAsStringAsync().Result}");
-
             if (!response.IsSuccessStatusCode)
             {
                 switch (response.StatusCode)
@@ -98,6 +95,8 @@ public static class DiscordWebhook
                         Console.WriteLine("Rate limiting...");
                         // it's actually like 300ms or so but this is fine whatever sue me
                         // I'd have to parse the json here to check what number they give me and I DON'T WANT TO
+                        // if you do run into a rate limit because you're sending 20 discord changelog updates and your
+                        // wait time is over 1 full second somehow (wtf are you doing?) then implement this properly
                         Thread.Sleep(1000);
                         break;
                     default:
