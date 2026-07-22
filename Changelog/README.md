@@ -53,19 +53,23 @@ This is intended for the master branch whenever a test publish is triggered but 
 ### Generate a diff markdown file
 
 ```
-Description:
+Description:                                                                                                                                                                                                                                                                                                                                                    
   Dumps a diff to a markdown file, for later sending to discord or hosting on CDN
 
 Usage:
   Changelog dump-diff [options]
 
 Options:
-  -s, --sha <sha> (REQUIRED)                              Specific ref sha to compare changes to. Good chance this should be the github.event.pull_request.base.sha workflow env
-  -c, --changelog-md-path <changelog-md-path> (REQUIRED)  Path where the changelog markdown file is located. This will be sent to the discord webhook. Won't generate if not included.
+  -r, --ref <ref> (REQUIRED)                              Specific ref sha or branch to compare changes to. Good chance this should be the github.event.pull_request.base.sha workflow env
+  -m, --merge-time-method <merge-time-method>             Method to use to determine the last merge time to use.
+                                                          Options:
+                                                          - lastrefyaml | refyaml - Use the last time recorded in changelog .yml files on the specific ref passed by --sha/-s, on the repo specified in the configuration
+                                                          - ref | refinfo - Use the time of the last commit to the given ref which is passed using --ref or -r [default: lastrefyaml]
+  -c, --changelog-md-path <changelog-md-path> (REQUIRED)  Path where the changelog markdown file is located. This will be sent to the discord webhook.
   -?, -h, --help                                          Show help and usage information
 ```
 
-Takes the last date it can find in the changelog .yml files **at the specified `--sha` ref**, then crawls the repository
+Takes the last date it can find in the changelog .yml files **at the specified `--ref` ref**, then crawls the repository
 and branch specified in the config for merged PRs. It then works these into a human readable markdown file that is meant
 for people eyes specified at `--changelog-md-path`
 

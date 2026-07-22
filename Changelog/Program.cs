@@ -4,6 +4,14 @@ namespace Changelog
 {
     internal static class Program
     {
+        private enum MergeTimeMethod
+        {
+            LastRefYaml,
+            RefInfo
+        }
+
+        private const string DefaultMergeTimeMethod = "lastrefyaml";
+
         static int Main(string[] args)
         {
             // create options for the command line
@@ -13,10 +21,21 @@ namespace Changelog
                 Required = true,
             };
 
-            Option<string> sinceRefShaOption = new("--sha", "-s")
+            Option<string> sinceRefShaOption = new("--ref", "-r")
             {
-                Description = "Specific ref sha to compare changes to. Good chance this should be the github.event.pull_request.base.sha workflow env",
+                Description = "Specific ref sha or branch to compare changes to. Good chance this should be the github.event.pull_request.base.sha workflow env",
                 Required = true,
+            };
+
+            Option<string> mergeTimeMethodOption = new("--merge-time-method", "-m")
+            {
+                Description = """
+                              Method to use to determine the last merge time to use.
+                              Options:
+                              - lastrefyaml | refyaml - Use the last time recorded in changelog .yml files on the specific ref passed by --sha/-s, on the repo specified in the configuration
+                              - ref | refinfo - Use the time of the last commit to the given ref which is passed using --ref or -r
+                              """,
+                DefaultValueFactory = _ => DefaultMergeTimeMethod
             };
 
             // changelogMarkdownPathOption will function both for dump-diff and discord-webhook, as output and input respectively
@@ -43,12 +62,25 @@ namespace Changelog
             Command dumpCommand = new("dump-diff", "Dumps a diff to a markdown file, for later sending to discord or hosting on CDN");
 
             dumpCommand.Options.Add(sinceRefShaOption);
+            dumpCommand.Options.Add(mergeTimeMethodOption);
             dumpCommand.Options.Add(changelogMarkdownPathOption);
 
-            dumpCommand.SetAction(parseResult => DumpDiffToMarkdown(
-                parseResult.GetValue(sinceRefShaOption)!,
-                parseResult.GetValue(changelogMarkdownPathOption)!
-            ));
+            dumpCommand.SetAction(parseResult =>
+            {
+                var mergeTimeMethodString = parseResult.GetValue(mergeTimeMethodOption)!;
+                var mergeTimeMethod = mergeTimeMethodString switch
+                {
+                    "lastrefyaml" or "refyaml" => MergeTimeMethod.LastRefYaml,
+                    "ref" or "refinfo" => MergeTimeMethod.RefInfo,
+                    _ => MergeTimeMethod.LastRefYaml
+                };
+
+                DumpDiffToMarkdown(
+                    parseResult.GetValue(sinceRefShaOption)!,
+                    mergeTimeMethod,
+                    parseResult.GetValue(changelogMarkdownPathOption)!
+                );
+            });
             rootCommand.Subcommands.Add(dumpCommand);
 
             // Send webhook subcommand
@@ -116,7 +148,8 @@ namespace Changelog
         }
 
         private static int DumpDiffToMarkdown(
-            string sinceRefSha,
+            string sinceRef,
+            MergeTimeMethod mergeTimeMethod,
             string changelogMarkdownPath
         )
         {
@@ -134,7 +167,18 @@ namespace Changelog
                 extraCategories.AddRange(Config.Instance.ExtraCategories.Split(','));
 
             // Get the last merged PR time
-            var lastMergedTime = PR.GetLastMergedFromRef(sinceRefSha, extraCategories);
+            DateTimeOffset lastMergedTime;
+            switch (mergeTimeMethod)
+            {
+                case MergeTimeMethod.LastRefYaml:
+                    lastMergedTime = PR.GetLastMergedFromRefYaml(sinceRef, extraCategories);
+                    break;
+                case MergeTimeMethod.RefInfo:
+                    lastMergedTime = PR.GetDateFromGitRefInfo(sinceRef);
+                    break;
+                default:
+                    throw new Exception($"Invalid merge time method: {mergeTimeMethod}");
+            }
 
             Console.WriteLine($"Generating diff from {lastMergedTime}");
 

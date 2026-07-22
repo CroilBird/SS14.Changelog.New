@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using GraphQL;
 using GraphQL.Client.Http;
@@ -27,9 +29,12 @@ public static class PR
 
     private static readonly HttpClient Client = new();
 
+    private static string UserAgentHeader = "ss14-changelog-generator";
+
     public const string MainCategory = "Main";
 
     private const string GithubGraphQLApiBase = "https://api.github.com/graphql";
+    private const string GithubRestApiBase = "https://api.github.com/repos";
     private const string GithubRawDownloadBase = "https://raw.githubusercontent.com";
 
     /// <summary>
@@ -118,11 +123,11 @@ public static class PR
     /// <summary>
     /// Get the time at which the last PR with a changelog was merged from a specific git reference
     /// </summary>
-    /// <param name="sinceRefSha"></param>
+    /// <param name="gitRef"></param>
     /// <param name="extraCategories"></param>
     /// <returns></returns>
     /// <exception cref="Exception"></exception>
-    public static DateTimeOffset GetLastMergedFromRef(string sinceRefSha, List<string> extraCategories)
+    public static DateTimeOffset GetLastMergedFromRefYaml(string gitRef, List<string> extraCategories)
     {
         var lastMergedTime = DateTimeOffset.MinValue;
 
@@ -133,7 +138,7 @@ public static class PR
         {
             // get the category's YAML at a specific ref
             var refChangelogUrl =
-                $"{GithubRawDownloadBase}/{Config.Instance.Repo}/{sinceRefSha}/{Config.Instance.ChangelogRepoPath}/{category}.yml";
+                $"{GithubRawDownloadBase}/{Config.Instance.Repo}/{gitRef}/{Config.Instance.ChangelogRepoPath}/{category}.yml";
 
             HttpRequestMessage request = new(HttpMethod.Get, refChangelogUrl);
 
@@ -166,6 +171,42 @@ public static class PR
         return lastMergedTime;
     }
 
+    /// <summary>
+    /// Gets the datetime associated with a specific ref. For a commit ref, this would be the commit time. 
+    /// </summary>
+    /// <param name="gitRef"></param>
+    /// <returns></returns>
+    /// <exception cref="Exception"></exception>
+    public static DateTimeOffset GetDateFromGitRefInfo(string gitRef)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, $"{GithubRestApiBase}/{Config.Instance.Repo}/commits/{gitRef}");
+        
+        request.Headers.Add("User-Agent", UserAgentHeader);
+        
+        if (Config.Instance.GithubToken is not null)
+            request.Headers.Add("Authorization", Config.Instance.GithubToken);
+        
+        var response = Client.Send(request);
+
+        if (!response.IsSuccessStatusCode)
+            throw new Exception($"Could not get commit information from ref {gitRef}: {response.Content.ReadAsStringAsync().Result}");
+
+        var deserializerOptions = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip
+        };
+
+        var commitResponse = JsonSerializer.Deserialize<ApiCommitResponse>(response.Content.ReadAsStream(), deserializerOptions);
+
+        if (commitResponse is null)
+            throw new Exception($"Could not deserialize response: {response.Content.ReadAsStringAsync().Result}");
+
+        var dateTime = DateTimeOffset.Parse(commitResponse.Commit.Committer.Date);
+
+        return dateTime;
+    }
+    
     /// <summary>
     /// Returns a list of github pull request objects that have a body and were merged into `<paramref name="branch"/>` after `<paramref name="lastMergeTime"/>`
     /// This uses github's graphql API to get only the PRs after a certain date, and should be pretty robust.
@@ -228,7 +269,7 @@ public static class PR
                                 endCursor
                               }
                             }
-                          }
+                            }
                           """;
 
 
@@ -246,7 +287,7 @@ public static class PR
 
             foreach (var edge in response.Data.Search.Edges)
             {
-                if (edge.Node.MergedAt <= lastMergeTime)
+                if (edge.Node.MergedAt < lastMergeTime)
                     continue;
 
                 pullRequests.Add(edge.Node);

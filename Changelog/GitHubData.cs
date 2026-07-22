@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 // https://github.com/space-wizards/SS14.Changelog/blob/83831f3cf8d1b6e49432b4a45f5aa3c6e3f5fc2c/SS14.Changelog/GitHubData.cs
 namespace Changelog
 {
+    // All these classes are used to deserialize the graphql response for pull requests
     public sealed record GraphQLResponse(GrapQLSearchResponse Search);
 
     public sealed record GrapQLSearchResponse(List<GraphQLEdge> Edges, GraphQLPageInfo PageInfo);
@@ -29,4 +30,11 @@ namespace Changelog
     public sealed record GHPushEvent(ImmutableArray<GHPushedCommit> Commits, string Ref);
 
     public sealed record GHPushedCommit(ImmutableArray<string> Added, ImmutableArray<string> Modified);
+    
+    // these are used to parse commit information from the regular API
+    public sealed record ApiCommitResponse(string Sha, Commit Commit);
+
+    public sealed record Commit(CommitCommitter Committer);
+
+    public sealed record CommitCommitter(string Date);
 }
